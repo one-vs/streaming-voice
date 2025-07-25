@@ -216,7 +216,11 @@ class EncoderState:
         att_mask = pad_mask = None
         for layer_index, layer in enumerate(self.layers):
             att_mask, pad_mask = self._update_masks(
-                layer_index, att_mask, pad_mask, padding_length, max_audio_length,
+                layer_index,
+                att_mask,
+                pad_mask,
+                padding_length,
+                max_audio_length,
             )
             if layer_index == self.reduction_position:
                 padding_length = padding_length_reduced

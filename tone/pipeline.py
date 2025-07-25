@@ -53,7 +53,9 @@ class StreamingCTCPipeline:
     StateType: TypeAlias = tuple[npt.NDArray[np.float16], StreamingLogprobSplitter.StateType]
 
     @classmethod
-    def from_hugging_face(cls, *, decoder_type: DecoderType = DecoderType.BEAM_SEARCH, use_compact: bool = True) -> Self:
+    def from_hugging_face(
+        cls, *, decoder_type: DecoderType = DecoderType.BEAM_SEARCH, use_compact: bool = True
+    ) -> Self:
         """Creates a pipeline instance by downloading artifacts from Hugging Face Hub.
 
         Args:

@@ -214,9 +214,7 @@ def _export_onnx(model: ModelToExport) -> bytes:
             input_names=["signal", "state"],
             output_names=["logprobs", "state_next"],
             opset_version=17,
-            dynamic_axes={
-                k: {0: "batch_size"} for k in ["signal", "state", "logprobs", "state_next"]
-            },
+            dynamic_axes={k: {0: "batch_size"} for k in ["signal", "state", "logprobs", "state_next"]},
         )
 
         return Path(model_output_path).read_bytes()
