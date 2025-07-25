@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from tone.pipeline import StreamingCTCPipeline
+from tone.decoder import DecoderType
 from tone.project import VERSION
 
 if TYPE_CHECKING:
@@ -31,6 +32,7 @@ class Settings:
 
     cors_allow_all: bool = False
     load_from_folder: Path | None = field(default_factory=lambda: os.getenv("LOAD_FROM_FOLDER", None))
+    use_compact: bool = field(default_factory=lambda: os.getenv("TONE_USE_COMPACT", "false").lower() == "true")
 
 
 class SingletonPipeline:
@@ -46,9 +48,29 @@ class SingletonPipeline:
     def init(cls, settings: Settings) -> None:
         """Initialize singleton object using settings."""
         if settings.load_from_folder is None:
-            cls.pipeline = StreamingCTCPipeline.from_hugging_face()
+            # Проверить, есть ли модели в папке models/
+            models_dir = Path("models")
+            if models_dir.exists() and (models_dir / "model.onnx").exists():
+                print(f"📁 Используются модели из папки: {models_dir.absolute()}")
+                decoder_type = DecoderType.GREEDY if settings.use_compact else DecoderType.BEAM_SEARCH
+                cls.pipeline = StreamingCTCPipeline.from_local(models_dir, decoder_type=decoder_type)
+            else:
+                print("📥 Модели не найдены в папке models/, скачиваем из HuggingFace...")
+                cls.pipeline = StreamingCTCPipeline.from_hugging_face(use_compact=settings.use_compact)
         else:
-            cls.pipeline = StreamingCTCPipeline.from_local(settings.load_from_folder)
+            # Загрузка из указанной папки
+            load_dir = Path(settings.load_from_folder)
+            print(f"📁 Загрузка моделей из: {load_dir.absolute()}")
+            
+            # Определить тип декодера на основе наличия файлов и настроек
+            if settings.use_compact or not (load_dir / "kenlm.bin").exists():
+                print("💡 Используется Greedy декодер (компактный режим)")
+                decoder_type = DecoderType.GREEDY
+            else:
+                print("🔧 Используется BeamSearch с KenLM")
+                decoder_type = DecoderType.BEAM_SEARCH
+                
+            cls.pipeline = StreamingCTCPipeline.from_local(load_dir, decoder_type=decoder_type)
 
     @classmethod
     def process_chunk(

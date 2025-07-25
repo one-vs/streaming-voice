@@ -53,12 +53,14 @@ class StreamingCTCPipeline:
     StateType: TypeAlias = tuple[npt.NDArray[np.float16], StreamingLogprobSplitter.StateType]
 
     @classmethod
-    def from_hugging_face(cls, *, decoder_type: DecoderType = DecoderType.BEAM_SEARCH) -> Self:
+    def from_hugging_face(cls, *, decoder_type: DecoderType = DecoderType.BEAM_SEARCH, use_compact: bool = True) -> Self:
         """Creates a pipeline instance by downloading artifacts from Hugging Face Hub.
 
         Args:
             decoder_type (DecoderType, optional): The decoding strategy to use.
                 Defaults to `DecoderType.BEAM_SEARCH`.
+            use_compact (bool, optional): Use Greedy decoder instead of full KenLM for Mac compatibility.
+                Defaults to True to avoid downloading 5.46GB KenLM model.
 
         Returns:
             An initialized `StreamingCTCPipeline` instance.
@@ -70,8 +72,15 @@ class StreamingCTCPipeline:
             decoder = GreedyCTCDecoder()
             return cls(model, logprob_splitter, decoder)
         if decoder_type == DecoderType.BEAM_SEARCH:
-            decoder = BeamSearchCTCDecoder.from_hugging_face()
-            return cls(model, logprob_splitter, decoder)
+            if use_compact:
+                print("💡 Используется Greedy декодер (компактный режим для Mac)")
+                print("   Для полной KenLM модели используйте: use_compact=False")
+                decoder = GreedyCTCDecoder()
+                return cls(model, logprob_splitter, decoder)
+            else:
+                print("⚠️  Загружается полная KenLM модель (5.46GB)...")
+                decoder = BeamSearchCTCDecoder.from_hugging_face()
+                return cls(model, logprob_splitter, decoder)
         raise ValueError("Unknown decoder type")
 
     @staticmethod
