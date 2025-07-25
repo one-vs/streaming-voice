@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from tone.decoder import DecoderType
+from tone.onnx_wrapper import get_available_gpus
 from tone.pipeline import StreamingCTCPipeline
 from tone.project import VERSION
 
@@ -33,6 +34,7 @@ class Settings:
     cors_allow_all: bool = False
     load_from_folder: Path | None = field(default_factory=lambda: os.getenv("LOAD_FROM_FOLDER", None))
     use_compact: bool = field(default_factory=lambda: os.getenv("TONE_USE_COMPACT", "false").lower() == "true")
+    use_gpu: bool = field(default_factory=lambda: os.getenv("TONE_USE_GPU", "true").lower() == "true")
 
 
 class SingletonPipeline:
@@ -61,14 +63,43 @@ class SingletonPipeline:
                     print("🔧 Используется BeamSearch с KenLM")
                     decoder_type = DecoderType.BEAM_SEARCH
 
-                cls.pipeline = StreamingCTCPipeline.from_local(models_dir, decoder_type=decoder_type)
+                cls.pipeline = StreamingCTCPipeline.from_local(
+                    models_dir,
+                    decoder_type=decoder_type,
+                    use_gpu=settings.use_gpu,
+                )
             else:
                 print("📥 Модели не найдены в папке models/, скачиваем из HuggingFace...")
-                cls.pipeline = StreamingCTCPipeline.from_hugging_face(use_compact=settings.use_compact)
+                cls.pipeline = StreamingCTCPipeline.from_hugging_face(
+                    use_compact=settings.use_compact,
+                    use_gpu=settings.use_gpu,
+                )
         else:
             # Загрузка из указанной папки
             load_dir = Path(settings.load_from_folder)
             print(f"📁 Загрузка моделей из: {load_dir.absolute()}")
+
+            # Show available GPUs
+            if settings.use_gpu:
+                gpus = get_available_gpus()
+                if gpus:
+                    print("🎮 Доступные GPU:")
+                    for gpu in gpus:
+                        print(f"   GPU {gpu['id']}: {gpu['name']} ({gpu['memory']})")
+
+                    # Get GPU device ID from environment
+                    gpu_device_id = int(os.environ.get("CUDA_DEVICE_ID", "0"))
+                    if gpu_device_id < len(gpus):
+                        selected_gpu = gpus[gpu_device_id]
+                        print(f"🎯 Выбран GPU {gpu_device_id}: {selected_gpu['name']}")
+                    else:
+                        print(f"⚠️ GPU {gpu_device_id} не найден, используется GPU 0")
+                        gpu_device_id = 0
+                else:
+                    print("⚠️ CUDA GPU не найдены")
+                    gpu_device_id = 0
+            else:
+                gpu_device_id = 0
 
             # Определить тип декодера на основе наличия файлов и настроек
             if settings.use_compact or not (load_dir / "kenlm.bin").exists():
@@ -78,7 +109,12 @@ class SingletonPipeline:
                 print("🔧 Используется BeamSearch с KenLM")
                 decoder_type = DecoderType.BEAM_SEARCH
 
-            cls.pipeline = StreamingCTCPipeline.from_local(load_dir, decoder_type=decoder_type)
+            cls.pipeline = StreamingCTCPipeline.from_local(
+                load_dir,
+                decoder_type=decoder_type,
+                use_gpu=settings.use_gpu,
+                gpu_device_id=gpu_device_id,
+            )
 
     @classmethod
     def process_chunk(

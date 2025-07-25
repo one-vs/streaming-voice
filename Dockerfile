@@ -1,31 +1,25 @@
 FROM python:3.10 AS build
 
-ARG POETRY_VERSION=2.1.1
+# Install UV
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
-RUN set -ex \
-    && curl -sSL https://install.python-poetry.org -o /get-poetry.py \
-    && POETRY_HOME=/opt/poetry python /get-poetry.py
-
-ENV PATH=/opt/poetry/bin:$PATH
-
-COPY pyproject.toml poetry.lock README.md /workspace/
+# Copy project files
+COPY pyproject.toml uv.lock README.md /workspace/
 COPY tone /workspace/tone
 
 WORKDIR /workspace
 
+# Create virtual environment and install dependencies
 RUN set -ex \
-    && python -m venv /venv --without-pip \
-    && . /venv/bin/activate \
-    && poetry install --only main -E demo \
-    # Reinstall main package in non-editable mode
-    && poetry build -f wheel \
-    && pip --python /venv/bin/python install dist/*.whl --no-deps --force-reinstall --no-compile \
+    && uv venv /venv \
+    && uv sync --extra demo --frozen \
     && rm -rf ~/.cache
 
 ENV PATH=/venv/bin:$PATH
 
+# Download models
 RUN set -ex \
-    && python -m tone download /models
+    && uv run python -m tone download /models
 
 FROM python:3.10-slim
 

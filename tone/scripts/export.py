@@ -102,7 +102,7 @@ class ModelToExport(torch.nn.Module):
             len_dtype=torch.int32,
             target="export",
         )
-        state = (torch.zeros(1, 1),) + state[:3] + state[4:]
+        state = (torch.zeros(1, 1), *state[:3], *state[4:])
         self._state_shape = [tuple(i.shape[1:]) for i in state]
         state_size = [i.flatten(1).size(-1) for i in state]
         self._state_place = [(sum(state_size[:i]), sum(state_size[: i + 1])) for i in range(len(state_size))]

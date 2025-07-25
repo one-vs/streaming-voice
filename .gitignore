@@ -13,3 +13,5 @@ dist/*
 .venv
 .DS_Store
 kenlm.bin
+libs/
+.ruff_cache

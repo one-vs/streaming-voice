@@ -10,6 +10,11 @@ import numpy.typing as npt
 
 from tone.pipeline import StreamingCTCPipeline
 
+try:
+    import miniaudio
+except ImportError:
+    miniaudio = None
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -38,14 +43,12 @@ def read_audio(path_to_file: Path | str) -> npt.NDArray[np.int32]:
         ModuleNotFoundError: If `miniaudio` is not installed.
 
     """
-    try:
-        import miniaudio
-    except ImportError as e:
+    if miniaudio is None:
         raise ModuleNotFoundError(
             "Package 'miniaudio' not found.\n"
             "Install it with the following command:\n"
-            "  poetry install -E demo   # using package extras\n",
-        ) from e
+            "  uv sync --extra demo   # using package extras\n",
+        )
 
     audio = miniaudio.decode_file(str(path_to_file), nchannels=1, sample_rate=8000)
     assert audio.sample_rate == 8000

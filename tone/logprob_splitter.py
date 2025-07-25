@@ -80,7 +80,7 @@ class StreamingLogprobSplitter:
         silence_ends = silence_ends[silence_is_phrase_separator]
 
         # Step 4. Iterate through all the speeches between silances and construct phrases out of them
-        speech_starts, speech_ends = silence_ends.tolist(), silence_starts.tolist()[1:] + [speech_len]
+        speech_starts, speech_ends = silence_ends.tolist(), [*silence_starts.tolist()[1:], speech_len]
         for i, (speech_start, speech_end) in enumerate(zip(speech_starts, speech_ends)):
             while speech_end - speech_start >= self.MAX_PHRASE_DURATION:  # Split too long phrase by force
                 yield speech_start, speech_start + self.MAX_PHRASE_DURATION

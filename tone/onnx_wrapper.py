@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -12,6 +13,153 @@ import numpy.typing as npt
 import onnxruntime as ort
 from huggingface_hub import hf_hub_download
 from typing_extensions import Self, TypeAlias
+
+
+def get_available_gpus() -> list[dict[str, str | int]]:
+    """Get list of available CUDA GPUs.
+
+    Returns:
+        List of GPU info dictionaries with 'id', 'name', 'memory' keys
+
+    """
+    gpus = []
+    try:
+        import pynvml
+
+        pynvml.nvmlInit()
+        device_count = pynvml.nvmlDeviceGetCount()
+
+        for i in range(device_count):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+            name = pynvml.nvmlDeviceGetName(handle)
+            # Handle both string and bytes return types
+            if isinstance(name, bytes):
+                name = name.decode("utf-8")
+            memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            memory_gb = memory_info.total // (1024**3)
+
+            gpus.append(
+                {
+                    "id": i,
+                    "name": name,
+                    "memory": f"{memory_gb}GB",
+                },
+            )
+    except ImportError:
+        # pynvml not available, fallback to basic detection
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            gpus.append(
+                {
+                    "id": 0,
+                    "name": "CUDA Device 0",
+                    "memory": "Unknown",
+                },
+            )
+    except (RuntimeError, OSError) as e:
+        # NVML error, but CUDA might still be available
+        print(f"⚠️ NVML error: {e}")
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            gpus.append(
+                {
+                    "id": 0,
+                    "name": "CUDA Device 0",
+                    "memory": "Unknown",
+                },
+            )
+
+    return gpus
+
+
+def _create_ort_session(model_path: str | Path, use_gpu: bool = True, gpu_device_id: int = 0) -> ort.InferenceSession:
+    """Create ONNX Runtime session with optimal providers.
+
+    Args:
+        model_path: Path to the ONNX model file
+        use_gpu: Whether to try using GPU providers (default: True)
+
+    Returns:
+        Configured ONNX Runtime InferenceSession
+
+    """
+    providers = []
+
+    # Check if GPU should be used and is available
+    if use_gpu:
+        available_providers = ort.get_available_providers()
+
+        # Add CUDA provider if available
+        if "CUDAExecutionProvider" in available_providers:
+            providers.append(
+                (
+                    "CUDAExecutionProvider",
+                    {
+                        "device_id": gpu_device_id,
+                        "arena_extend_strategy": "kNextPowerOfTwo",
+                        "gpu_mem_limit": 4 * 1024 * 1024 * 1024,  # 4GB limit
+                        "cudnn_conv_algo_search": "EXHAUSTIVE",
+                        "do_copy_in_default_stream": True,
+                        "cudnn_conv_use_max_workspace": True,  # Use maximum workspace
+                    },
+                ),
+            )
+            print("🚀 Using CUDA GPU acceleration with optimizations")
+
+        # Add DirectML provider if available (Windows)
+        elif "DmlExecutionProvider" in available_providers:
+            providers.append("DmlExecutionProvider")
+            print("🚀 Using DirectML GPU acceleration")
+
+        # Add OpenVINO provider if available
+        elif "OpenVINOExecutionProvider" in available_providers:
+            providers.append("OpenVINOExecutionProvider")
+            print("🚀 Using OpenVINO acceleration")
+
+    # Always add CPU as fallback
+    providers.append("CPUExecutionProvider")
+
+    # Create session options for better performance
+    sess_options = ort.SessionOptions()
+    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+
+    # Optimize for GPU performance
+    if use_gpu and any("CUDA" in str(p) or "Dml" in str(p) for p in providers):
+        # GPU optimizations
+        sess_options.enable_mem_pattern = True  # Enable memory pattern optimization
+        sess_options.enable_cpu_mem_arena = False  # Disable CPU memory arena for GPU
+        sess_options.enable_mem_reuse = True  # Enable memory reuse
+        # Reduce logging for better performance
+        sess_options.log_severity_level = 3  # Only show errors (reduces Memcpy warnings)
+    else:
+        # CPU optimizations
+        sess_options.enable_mem_pattern = True
+        sess_options.enable_cpu_mem_arena = True
+        sess_options.enable_mem_reuse = True
+
+    # Set number of threads based on environment or CPU count
+    num_threads = int(os.environ.get("ORT_NUM_THREADS", os.cpu_count() or 4))
+    sess_options.intra_op_num_threads = num_threads
+    sess_options.inter_op_num_threads = 1
+
+    print(f"🔧 ONNX Runtime providers: {[p[0] if isinstance(p, tuple) else p for p in providers]}")
+
+    session = ort.InferenceSession(str(model_path), sess_options, providers=providers)
+
+    # Additional GPU optimizations after session creation
+    if use_gpu and any("CUDA" in str(p) or "Dml" in str(p) for p in providers):
+        try:
+            # Try to enable additional CUDA optimizations
+            if hasattr(session, "set_providers"):
+                # Ensure CUDA provider is prioritized
+                current_providers = session.get_providers()
+                if "CUDAExecutionProvider" in current_providers:
+                    print("✅ CUDA provider successfully initialized")
+                else:
+                    print("⚠️ CUDA provider not active, using fallback")
+        except (AttributeError, RuntimeError) as e:
+            print(f"⚠️ GPU optimization warning: {e}")
+
+    return session
 
 
 class StreamingCTCModel:
@@ -36,18 +184,21 @@ class StreamingCTCModel:
     _ort_sess: ort.InferenceSession
 
     @classmethod
-    def from_hugging_face(cls) -> Self:
+    def from_hugging_face(cls, *, use_gpu: bool = True) -> Self:
         """Load and initialize the model from Hugging Face Hub.
 
         Downloads the model if not present locally, and initializes
         an ONNX inference session.
+
+        Args:
+            use_gpu (bool): Whether to try using GPU acceleration (default: True).
 
         Returns:
             Self: An instance of StreamingCTCModel ready for inference.
 
         """
         model_path = cls.download_from_hugging_face()
-        return cls.from_local(model_path)
+        return cls.from_local(model_path, use_gpu=use_gpu)
 
     @classmethod
     def download_from_hugging_face(cls) -> str:
@@ -63,17 +214,18 @@ class StreamingCTCModel:
         )
 
     @classmethod
-    def from_local(cls, model_path: str | Path) -> Self:
+    def from_local(cls, model_path: str | Path, *, use_gpu: bool = True, gpu_device_id: int = 0) -> Self:
         """Initialize the model from a local ONNX file.
 
         Args:
             model_path (str | Path): Path to the ONNX model file.
+            use_gpu (bool): Whether to try using GPU acceleration (default: True).
 
         Returns:
             Self: An instance of StreamingCTCModel ready for inference.
 
         """
-        ort_sess = ort.InferenceSession(model_path)
+        ort_sess = _create_ort_session(model_path, use_gpu=use_gpu, gpu_device_id=gpu_device_id)
         return cls(ort_sess)
 
     def __init__(self, ort_sess: ort.InferenceSession) -> None:

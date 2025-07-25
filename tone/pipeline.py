@@ -54,7 +54,11 @@ class StreamingCTCPipeline:
 
     @classmethod
     def from_hugging_face(
-        cls, *, decoder_type: DecoderType = DecoderType.BEAM_SEARCH, use_compact: bool = True
+        cls,
+        *,
+        decoder_type: DecoderType = DecoderType.BEAM_SEARCH,
+        use_compact: bool = True,
+        use_gpu: bool = True,
     ) -> Self:
         """Creates a pipeline instance by downloading artifacts from Hugging Face Hub.
 
@@ -63,12 +67,14 @@ class StreamingCTCPipeline:
                 Defaults to `DecoderType.BEAM_SEARCH`.
             use_compact (bool, optional): Use Greedy decoder instead of full KenLM for Mac compatibility.
                 Defaults to True to avoid downloading 5.46GB KenLM model.
+            use_gpu (bool, optional): Whether to try using GPU acceleration.
+                Defaults to True.
 
         Returns:
             An initialized `StreamingCTCPipeline` instance.
 
         """
-        model = StreamingCTCModel.from_hugging_face()
+        model = StreamingCTCModel.from_hugging_face(use_gpu=use_gpu)
         logprob_splitter = StreamingLogprobSplitter()
         if decoder_type == DecoderType.GREEDY:
             decoder = GreedyCTCDecoder()
@@ -79,10 +85,9 @@ class StreamingCTCPipeline:
                 print("   Для полной KenLM модели используйте: use_compact=False")
                 decoder = GreedyCTCDecoder()
                 return cls(model, logprob_splitter, decoder)
-            else:
-                print("⚠️  Загружается полная KenLM модель (5.46GB)...")
-                decoder = BeamSearchCTCDecoder.from_hugging_face()
-                return cls(model, logprob_splitter, decoder)
+            print("⚠️  Загружается полная KenLM модель (5.46GB)...")
+            decoder = BeamSearchCTCDecoder.from_hugging_face()
+            return cls(model, logprob_splitter, decoder)
         raise ValueError("Unknown decoder type")
 
     @staticmethod
@@ -95,10 +100,24 @@ class StreamingCTCPipeline:
             copyfile(BeamSearchCTCDecoder.download_from_hugging_face(), dir_path / "kenlm.bin")
 
     @classmethod
-    def from_local(cls, dir_path: str | Path, *, decoder_type: DecoderType = DecoderType.BEAM_SEARCH) -> Self:
-        """Create StreamingCTCPipeline instance using artifacts from local folder."""
+    def from_local(
+        cls,
+        dir_path: str | Path,
+        *,
+        decoder_type: DecoderType = DecoderType.BEAM_SEARCH,
+        use_gpu: bool = True,
+        gpu_device_id: int = 0,
+    ) -> Self:
+        """Create StreamingCTCPipeline instance using artifacts from local folder.
+
+        Args:
+            dir_path: Path to directory containing model files
+            decoder_type: Type of decoder to use
+            use_gpu: Whether to try using GPU acceleration (default: True)
+
+        """
         dir_path = Path(dir_path)
-        model = StreamingCTCModel.from_local(dir_path / "model.onnx")
+        model = StreamingCTCModel.from_local(dir_path / "model.onnx", use_gpu=use_gpu, gpu_device_id=gpu_device_id)
         logprob_splitter = StreamingLogprobSplitter()
         if decoder_type == DecoderType.GREEDY:
             decoder = GreedyCTCDecoder()
